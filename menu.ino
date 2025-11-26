@@ -57,12 +57,13 @@ MqttClient mqttClient(wifiClient);
 
 
 // MQTT topics
-const char topicCmd[] = "aimar06_comando";
+const char topicCmd[] = "arduino_cmd";
 
-const char mqttServer[] = "broker.hivemq.com"; // broker.hivemq.com   test.mosquitto.org
+const char mqttServer[] = "test.mosquitto.org"; // broker.hivemq.com   test.mosquitto.org
 int port = 1883;
 
 
+WiFiServer server(80);
 
 
 
@@ -79,16 +80,27 @@ void setup() {
     carrier.display.print("Error del SD");
     while (1);
   }
+  // Conexon wifi
   conectarWiFi();
+  //Conexion servidor mqtt
   conectarMqtt();
+  mqttClient.onMessage(onMqttMessage);
+  // Iniciar servidor web
+  server.begin();
   delay(1500);
 }
 
 void loop() {
-  //conexión MQTT
-  if (mqttClient.connected()) {
-    mqttClient.poll();
+  // MQTT
+  if (!mqttClient.connected()) {
+    conectarMqtt();
   }
+  mqttClient.poll();
+
+
+  // Servidor web
+  serverweb();
+
 
 
   // Codigo alarma activada
@@ -97,8 +109,7 @@ void loop() {
     return;
   }
   
-  
-
+  // Alarma
   if (estado == 0) {
     menu();
     estado = 25; // asi no se muestra más el menu
@@ -135,8 +146,13 @@ void loop() {
     if (carrier.Buttons.onTouchDown(TOUCH3)) { //Guardar la configuracion en el archivo conf.csv 
       guardarConfiguracion();
     }
+    if (carrier.Buttons.onTouchDown(TOUCH4)) { //Cargar la configuracion en el archivo conf.csv 
+      leerConfiguracion();
+    }
   }
 }
+
+
 
 void menu() {
   carrier.display.fillScreen(ST77XX_BLACK); //Color del fondo de la pantalla
@@ -632,7 +648,7 @@ bool leerConfiguracion() {
   }
 
   file.close();
-  Serial.println("config.csv no existe. Usando valores por defecto.");
+  Serial.println("Cargado correctamente config.");
   return true;
 }
 
@@ -674,47 +690,56 @@ void conectarMqtt() {
 
 
 void onMqttMessage(int messageSize) {
-  Serial.println("Esperando mensajes...");
-  // we received a message, print out the topic and contents
-  Serial.println("Received a message with topic '");
-  Serial.print(mqttClient.messageTopic());
-  Serial.print("', length ");
+  String mensaje = mqttClient.readString();
+
+  // String mensaje = "";
+  // while (mqttClient.available()) {
+  //   mensaje += (char)mqttClient.read();
+  // }
+  // mensaje.trim();
+
+  Serial.println("==================================");
+  Serial.println("Comando recibido.");
+  Serial.print("Tamaño: ");
   Serial.print(messageSize);
-  Serial.println(" bytes:");
-
-  String mensaje = "";
-  while (mqttClient.available()) {
-    //Serial.print((char)mqttClient.read());
-    char c = (char)mqttClient.read();
-    mensaje += c;    // Construye el mensaje carácter a carácter
-  }
-  mensaje.trim();
-  Serial.print(" → Mensaje recibido: ");
+  Serial.println(" bytes");
+  Serial.print("Contenido → ");
   Serial.println(mensaje);
+  Serial.println("==================================");
 
+  // Procesar comandos
+  mensaje.trim(); // Elimina espacios y \n al inicio/final
 
-  Serial.println("Mensaje: " + mensaje);
-
-
-  // Comandos simples (muy directos)
   if (mensaje == "MENU") {
     estado = 0;
-  } else if (mensaje == "ALARMA_TOGGLE") {
+    Serial.println("→ Comando: MENU");
+  }
+  else if (mensaje == "ALARMA_TOGGLE") {
     estado = 1;
-  } else if (mensaje == "SOUND_ON") {
+    Serial.println("→ Comando: ALARMA_TOGGLE");
+  }
+  else if (mensaje == "SOUND_ON") {
     sonido = true;
-    Serial.println("Sonido on");
-  } else if (mensaje == "SOUND_OFF") {
-    Serial.println("Sonido off");
+    Serial.println("→ Sonido activado por MQTT");
+  }
+  else if (mensaje == "SOUND_OFF") {
     sonido = false;
-  } else if (mensaje == "SAVE") {
+    Serial.println("→ Sonido desactivado por MQTT");
+  }
+  else if (mensaje == "SAVE") {
     guardarConfiguracion();
     estado = 0;
-  } else if (mensaje == "LOAD") {
-    estado = 0;
+    Serial.println("→ Configuración guardada por MQTT");
   }
-
+  else if (mensaje == "LOAD") {
+    estado = 0;
+    Serial.println("→ Cargar configuración (pendiente implementación)");
+  }
+  else {
+    Serial.println("→ Comando MQTT no reconocido");
+  }
 }
+
 
 
 // void enviarEstado() {
@@ -734,3 +759,238 @@ void onMqttMessage(int messageSize) {
 //   mqttClient.print(sonido);
 //   mqttClient.endMessage();
 // }
+
+
+
+
+// -------------------Servidor web
+void serverweb() {
+
+  WiFiClient client = server.available(); 
+
+  if (client) {
+    Serial.println("Cliente conectado");
+
+    String req = client.readString();
+    client.flush();
+
+    Serial.println("Petición: " + req);
+
+    // --- ACCIONES DE LOS BOTONES ---
+    if (req.indexOf("GET /activar") != -1) {
+      Serial.println("Opción Activar alarma");
+    }
+      
+    // -------------------------------------------------
+    // Manejo de /pin y /pin?guardar=1&d1=...&d2=... etc.
+    // -------------------------------------------------
+    if (req.indexOf("GET /pin") != -1) {
+      // Extraer la primera línea completa (la línea Request-Line)
+      // req contiene ya todas las cabeceras, pero vamos a sacar la primera línea:
+      int lineEnd = req.indexOf('\n'); // índice del fin de la primera línea
+      String firstLine;
+      if (lineEnd != -1) {
+        firstLine = req.substring(0, lineEnd);
+      } else {
+        firstLine = req; // fallback
+      }
+      firstLine.trim(); // limpia espacios
+
+      // Ejemplo de firstLine: "GET /pin?guardar=1&d1=3&d2=4&d3=1&d4=9 HTTP/1.1"
+      Serial.print("Request-Line: ");
+      Serial.println(firstLine);
+
+      // Obtener la ruta (entre "GET " y " HTTP")
+      int p1 = firstLine.indexOf(' ');
+      int p2 = firstLine.indexOf(" HTTP");
+      String path = "/";
+      if (p1 != -1 && p2 != -1 && p2 > p1) {
+        path = firstLine.substring(p1 + 1, p2);
+      }
+      Serial.print("Path: ");
+      Serial.println(path);
+
+      // Si la path NO contiene "guardar=1", mostramos el formulario
+      if (path.indexOf("guardar=1") == -1) {
+        // Mostrar formulario
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: text/html");
+        client.println("Connection: close");
+        client.println();
+        client.println("<!DOCTYPE HTML>");
+        client.println("<html><body style='font-family:Arial;text-align:center;'>");
+        client.println("<h2>Configurar PIN</h2>");
+        // OJO: añadimos un campo hidden para asegurar guardar=1
+        client.println("<form action='/pin' method='GET'>");
+        client.println("<input type='hidden' name='guardar' value='1'>");
+        client.println("Dígito 1: <input type='number' name='d1' min='0' max='9'><br><br>");
+        client.println("Dígito 2: <input type='number' name='d2' min='0' max='9'><br><br>");
+        client.println("Dígito 3: <input type='number' name='d3' min='0' max='9'><br><br>");
+        client.println("Dígito 4: <input type='number' name='d4' min='0' max='9'><br><br>");
+        client.println("<input type='submit' value='Guardar PIN' style='width:200px;height:50px;font-size:20px;'>");
+        client.println("</form></body></html>");
+        client.stop();
+        return; // importante salir para no procesar la sección "guardar" a continuación
+      }
+
+      // Si llegamos aquí, path contiene guardar=1 -> procesar parámetros
+      // Buscamos los parámetros en la parte de query (después de '?')
+      int qpos = path.indexOf('?');
+      String query = "";
+      if (qpos != -1) {
+        query = path.substring(qpos + 1); // todo lo que hay después de '?'
+      }
+      Serial.print("Query: ");
+      Serial.println(query);
+
+      // Función lambda corta para extraer el valor de un parámetro (si existe)
+      auto getParam = [&](const char* name) -> String {
+        String key = String(name) + "=";
+        int i = query.indexOf(key);
+        if (i == -1) return String(""); // no existe
+        int start = i + key.length();
+        int amp = query.indexOf('&', start);
+        if (amp == -1) amp = query.length();
+        return query.substring(start, amp);
+      };
+
+      String sd1 = getParam("d1");
+      String sd2 = getParam("d2");
+      String sd3 = getParam("d3");
+      String sd4 = getParam("d4");
+
+      // Si vienen vacíos, toInt() dará 0; si no vienen, también ponemos 0 por seguridad
+      int d1 = (sd1.length() > 0) ? sd1.toInt() : 0;
+      int d2 = (sd2.length() > 0) ? sd2.toInt() : 0;
+      int d3 = (sd3.length() > 0) ? sd3.toInt() : 0;
+      int d4 = (sd4.length() > 0) ? sd4.toInt() : 0;
+
+      // Guarda en el array global
+      pinCode[0] = constrain(d1, 0, 9);
+      pinCode[1] = constrain(d2, 0, 9);
+      pinCode[2] = constrain(d3, 0, 9);
+      pinCode[3] = constrain(d4, 0, 9);
+
+      Serial.println("Nuevo PIN configurado:");
+      Serial.print(pinCode[0]); Serial.print(", ");
+      Serial.print(pinCode[1]); Serial.print(", ");
+      Serial.print(pinCode[2]); Serial.print(", ");
+      Serial.println(pinCode[3]);
+
+      // Respuesta de confirmación y volver al menú
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<html><body style='text-align:center;font-family:Arial;'>");
+      client.println("<h2>PIN Actualizado Correctamente</h2>");
+      client.print("<p>Nuevo PIN: ");
+      client.print(pinCode[0]); client.print(pinCode[1]); client.print(pinCode[2]); client.print(pinCode[3]);
+      client.println("</p>");
+      client.println("<a href='/'><button style='width:200px;height:50px;font-size:20px;'>Volver al menú</button></a>");
+      client.println("</body></html>");
+      client.stop();
+      return;
+    }
+
+    if (req.indexOf("GET /sonido") != -1) {
+      Serial.println("Opción alternar conf sonido");
+
+      // Alternar el valor del sonido
+      sonido = !sonido;
+      // Enviar una página HTML
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<!DOCTYPE HTML>");
+      client.println("<html>");
+      client.println("<body>");
+
+      // Mostrar el estado actual
+      client.print("<script>alert('Sonido = ");
+      client.print(sonido ? "ACTIVO" : "DESACTIVADO");
+      client.println("');</script>");
+
+      // Después del alert, volver al menú automáticamente
+      client.println("<meta http-equiv='refresh' content='0; url=/' />");
+
+      client.println("</body></html>");
+
+      client.stop();
+    }
+
+    
+    if (req.indexOf("GET /guardar") != -1) {
+      Serial.println("Guardar configuracion");
+
+      guardarConfiguracion();
+
+      // Enviar una página HTML
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<!DOCTYPE HTML>");
+      client.println("<html>");
+      client.println("<body>");
+
+      client.println("<h2>Configuracion guardada en SD</h2>");
+      client.println("<a href='/'><button>Volver</button></a><br>");
+
+      client.println("</body></html>");
+      client.stop();
+    }
+    if (req.indexOf("GET /cargar") != -1) {
+      leerConfiguracion();
+
+      Serial.println("Cargar configuracion");
+
+      // Enviar una página HTML
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<!DOCTYPE HTML>");
+      client.println("<html>");
+      client.println("<body>");
+
+      client.println("<h2>Configuracion cargada de SD</h2>");
+      client.println("<a href='/'><button>Volver</button></a><br>");
+      
+      client.println("</body></html>");
+      client.stop();
+    }
+
+    // --- GENERAR LA PÁGINA HTML ---
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html");
+    client.println("Connection: close");
+    client.println();
+    client.println("<!DOCTYPE HTML>");
+    client.println("<html>");
+    client.println("<head><meta name='viewport' content='width=device-width, initial-scale=1'/>");
+    client.println("<style>");
+    client.println("button { width:200px; height:60px; font-size:24px; margin:10px; }");
+    client.println("</style>");
+    client.println("</head>");
+    client.println("<body style='text-align:center; font-family:Arial;'>");
+
+    client.println("<h1>MENU PRINCIPAL</h1>");
+
+    client.println("<a href='/activar'><button>Activar</button></a><br>");
+    client.println("<a href='/pin'><button>Configurar PIN</button></a><br>");
+    client.println("<a href='/sonido'><button>Alternar conf sonido alarma</button></a><br>");
+    client.println("<a href='/guardar'><button>Guardar configuracion</button></a><br>");
+    client.println("<a href='/cargar'><button>Cargar configuracion</button></a><br>");
+
+    client.println("</body>");
+    client.println("</html>");
+
+    delay(1);
+    client.stop();
+    Serial.println("Cliente desconectado");
+  }
+
+  delay (50);
+}
