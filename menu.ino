@@ -58,6 +58,7 @@ MqttClient mqttClient(wifiClient);
 
 // MQTT topics
 const char topicCmd[] = "arduino_cmd";
+const char topicEstado[] = "arduino_estado";
 
 const char mqttServer[] = "test.mosquitto.org"; // broker.hivemq.com   test.mosquitto.org
 int port = 1883;
@@ -434,9 +435,6 @@ void validarPin() {
     carrier.display.setCursor(20, 100);
     carrier.display.print("PIN INCORRECTO");
     delay(2000);
-    // Reiniciar entrada
-    for (int i = 0; i < 4; i++) pinSelect[i] = 0;
-    digitoSel = 0;
   }
 }
 
@@ -610,7 +608,8 @@ void guardarConfiguracion() {
   carrier.display.setTextSize(3);
   carrier.display.setCursor(3,50);
   carrier.display.print("Conf guardada");
-  delay (5000);
+  estado=0;
+  delay (4000);
 }
 
 
@@ -620,6 +619,9 @@ bool leerConfiguracion() {
 
   if (!file) {
     Serial.println("config.csv no existe. Usando valores por defecto.");
+    carrier.display.setTextSize(3);
+    carrier.display.setCursor(3,50);
+    carrier.display.print("Conf. no cargada");
     return false;
   }
 
@@ -649,7 +651,12 @@ bool leerConfiguracion() {
 
   file.close();
   Serial.println("Cargado correctamente config.");
+  carrier.display.setTextSize(3);
+  carrier.display.setCursor(3,50);
+  carrier.display.print("Conf. cargada correctamente");
   return true;
+  estado = 0;
+  delay (3000);
 }
 
 
@@ -682,9 +689,12 @@ void conectarMqtt() {
     }
     Serial.println(" Conectado!");
 
-    Serial.println("Subscribing to topic: ");
+    Serial.println("Topic comandos: ");
     Serial.println(topicCmd);
     mqttClient.subscribe(topicCmd);
+
+    Serial.println("Para recibir estado:");
+    Serial.println(topicEstado);
 }
 
 
@@ -732,33 +742,42 @@ void onMqttMessage(int messageSize) {
     Serial.println("→ Configuración guardada por MQTT");
   }
   else if (mensaje == "LOAD") {
+    leerConfiguracion();
     estado = 0;
-    Serial.println("→ Cargar configuración (pendiente implementación)");
+    Serial.println("→ Configuración cargada por MQTT");
   }
   else {
     Serial.println("→ Comando MQTT no reconocido");
+    enviarEstado();
   }
 }
 
 
 
-// void enviarEstado() {
-//   // Mandar PIN
-//   mqttClient.beginMessage(topicPinConfig);
-//   mqttClient.print(pinCode[0]);
-//   mqttClient.print(",");
-//   mqttClient.print(pinCode[1]);
-//   mqttClient.print(",");
-//   mqttClient.print(pinCode[2]);
-//   mqttClient.print(",");
-//   mqttClient.print(pinCode[3]);
-//   mqttClient.endMessage();
+void enviarEstado() {
+  mqttClient.beginMessage(topicEstado);
 
-//   // Mandar sonido
-//   mqttClient.beginMessage(topicSonido);
-//   mqttClient.print(sonido);
-//   mqttClient.endMessage();
-// }
+  
+  // Enviar pin configurado
+  mqttClient.print(pinCode[0]);
+  mqttClient.print(",");
+  mqttClient.print(pinCode[1]);
+  mqttClient.print(",");
+  mqttClient.print(pinCode[2]);
+  mqttClient.print(",");
+  mqttClient.print(pinCode[3]);
+
+  // Mandar sonido
+  mqttClient.print("\nSonido:");
+  mqttClient.print(sonido);
+  
+  mqttClient.endMessage();
+  Serial.println("==================================================================");
+  Serial.println("Estado actual enviado al cliente mqtt");
+  Serial.print("Topic estado: ");
+  Serial.println(topicEstado);
+  Serial.println("==================================================================");
+}
 
 
 
@@ -779,6 +798,21 @@ void serverweb() {
     // --- ACCIONES DE LOS BOTONES ---
     if (req.indexOf("GET /activar") != -1) {
       Serial.println("Opción Activar alarma");
+      activarAlarma();
+      // Enviar una página HTML
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<!DOCTYPE HTML>");
+      client.println("<html>");
+      client.println("<body>");
+      
+
+      client.println("<meta http-equiv='refresh' content='0; url=/' />");
+      
+      client.println("</body></html>");
+      client.stop();
     }
       
     // -------------------------------------------------
@@ -823,10 +857,10 @@ void serverweb() {
         // OJO: añadimos un campo hidden para asegurar guardar=1
         client.println("<form action='/pin' method='GET'>");
         client.println("<input type='hidden' name='guardar' value='1'>");
-        client.println("Dígito 1: <input type='number' name='d1' min='0' max='9'><br><br>");
-        client.println("Dígito 2: <input type='number' name='d2' min='0' max='9'><br><br>");
-        client.println("Dígito 3: <input type='number' name='d3' min='0' max='9'><br><br>");
-        client.println("Dígito 4: <input type='number' name='d4' min='0' max='9'><br><br>");
+        client.println("Digito 1: <input type='number' name='d1' min='0' max='9'><br><br>");
+        client.println("Digito 2: <input type='number' name='d2' min='0' max='9'><br><br>");
+        client.println("Digito 3: <input type='number' name='d3' min='0' max='9'><br><br>");
+        client.println("Digito 4: <input type='number' name='d4' min='0' max='9'><br><br>");
         client.println("<input type='submit' value='Guardar PIN' style='width:200px;height:50px;font-size:20px;'>");
         client.println("</form></body></html>");
         client.stop();
@@ -887,7 +921,7 @@ void serverweb() {
       client.print("<p>Nuevo PIN: ");
       client.print(pinCode[0]); client.print(pinCode[1]); client.print(pinCode[2]); client.print(pinCode[3]);
       client.println("</p>");
-      client.println("<a href='/'><button style='width:200px;height:50px;font-size:20px;'>Volver al menú</button></a>");
+      client.println("<a href='/'><button style='width:200px;height:50px;font-size:20px;'>Volver al menu</button></a>");
       client.println("</body></html>");
       client.stop();
       return;
@@ -962,33 +996,170 @@ void serverweb() {
       client.stop();
     }
 
-    // --- GENERAR LA PÁGINA HTML ---
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: text/html");
-    client.println("Connection: close");
-    client.println();
-    client.println("<!DOCTYPE HTML>");
-    client.println("<html>");
-    client.println("<head><meta name='viewport' content='width=device-width, initial-scale=1'/>");
-    client.println("<style>");
-    client.println("button { width:200px; height:60px; font-size:24px; margin:10px; }");
-    client.println("</style>");
-    client.println("</head>");
-    client.println("<body style='text-align:center; font-family:Arial;'>");
+    // -----------------------------
+    // DESBLOQUEO DE ALARMA (PIN)
+    // -----------------------------
+    if (req.indexOf("GET /off")!= -1) {
 
-    client.println("<h1>MENU PRINCIPAL</h1>");
+      // Extraemos primera línea
+      int lineEnd = req.indexOf('\n');
+      String firstLine = (lineEnd != -1) ? req.substring(0, lineEnd) : req;
+      firstLine.trim();
+      Serial.print("Request-Line: ");
+      Serial.println(firstLine);
 
-    client.println("<a href='/activar'><button>Activar</button></a><br>");
-    client.println("<a href='/pin'><button>Configurar PIN</button></a><br>");
-    client.println("<a href='/sonido'><button>Alternar conf sonido alarma</button></a><br>");
-    client.println("<a href='/guardar'><button>Guardar configuracion</button></a><br>");
-    client.println("<a href='/cargar'><button>Cargar configuracion</button></a><br>");
+      // Obtener la ruta completa (sin "GET " ni " HTTP")
+      int p1 = firstLine.indexOf(' ');
+      int p2 = firstLine.indexOf(" HTTP");
+      String path = "/";
+      if (p1 != -1 && p2 != -1 && p2 > p1) {
+        path = firstLine.substring(p1 + 1, p2);
+      }
+      Serial.print("Path: ");
+      Serial.println(path);
 
-    client.println("</body>");
-    client.println("</html>");
 
-    delay(1);
-    client.stop();
+      if (path.indexOf("guardar=1") == -1) {
+        // ---------- MOSTRAR FORMULARIO ----------
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: text/html");
+        client.println("Connection: close");
+        client.println();
+        client.println("<!DOCTYPE HTML><html><body style='font-family:Arial;text-align:center;'>");
+        client.println("<h2>Introduce el PIN</h2>");
+
+        client.println("<form action='/off' method='GET'>");
+        client.println("<input type='hidden' name='guardar' value='1'>");
+
+        client.println("Digito 1: <input type='number' name='d1' min='0' max='9'><br><br>");
+        client.println("Digito 2: <input type='number' name='d2' min='0' max='9'><br><br>");
+        client.println("Digito 3: <input type='number' name='d3' min='0' max='9'><br><br>");
+        client.println("Digito 4: <input type='number' name='d4' min='0' max='9'><br><br>");
+
+        client.println("<input type='submit' value='Enviar' style='width:200px;height:50px;font-size:20px;'>");
+        client.println("</form></body></html>");
+        client.stop();
+        return;
+      }
+
+      
+      int qpos = path.indexOf('?');
+      String query = (qpos != -1) ? path.substring(qpos + 1) : "";
+      Serial.print("Query: ");
+      Serial.println(query);
+
+      // Función auxiliar para obtener parámetros
+      auto getParam = [&](String name) {
+        name += "=";
+        int idx = query.indexOf(name);
+        if (idx == -1) return String("");
+        int start = idx + name.length();
+        int end = query.indexOf('&', start);
+        if (end == -1) end = query.length();
+        return query.substring(start, end);
+      };
+
+      // Leer cada dígito
+      int d1 = getParam("d1").toInt();
+      int d2 = getParam("d2").toInt();
+      int d3 = getParam("d3").toInt();
+      int d4 = getParam("d4").toInt();
+
+      // Guardarlos en el array global pinSelect[]
+      pinSelect[0] = constrain(d1, 0, 9);
+      pinSelect[1] = constrain(d2, 0, 9);
+      pinSelect[2] = constrain(d3, 0, 9);
+      pinSelect[3] = constrain(d4, 0, 9);
+
+      Serial.println("PIN introducido por el usuario:");
+      Serial.print(pinSelect[0]); Serial.print(",");
+      Serial.print(pinSelect[1]); Serial.print(",");
+      Serial.print(pinSelect[2]); Serial.print(",");
+      Serial.println(pinSelect[3]);
+
+      // Validar PIN introducido
+      validarPin();
+
+      // Enviar una página HTML
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<!DOCTYPE HTML>");
+      client.println("<html>");
+      client.println("<body>");
+
+      client.println("<h2>Validando pin...</h2>");
+      // Si quieres: tras validar, cambia estado del programa
+      if (!alarmaActiva) {
+        client.println("<h2>PIN correcto</h2>");
+      } else {
+        client.println("<h2>PIN incorrecto</h2>");
+      }
+
+      delay(2000);
+      client.println("<meta http-equiv='refresh' content='0; url=/' />");
+
+      client.println("</body></html>");
+      client.stop();
+
+      return;
+    }
+
+
+    if (!alarmaActiva) {
+      // --- GENERAR LA PÁGINA HTML ---
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<!DOCTYPE HTML>");
+      client.println("<html>");
+      client.println("<head><meta name='viewport' content='width=device-width, initial-scale=1'/>");
+      client.println("<style>");
+      client.println("button { width:200px; height:60px; font-size:24px; margin:10px; }");
+      client.println("</style>");
+      client.println("</head>");
+      client.println("<body style='text-align:center; font-family:Arial;'>");
+
+      client.println("<h1>MENU PRINCIPAL</h1>");
+
+      client.println("<a href='/activar'><button>Activar</button></a><br>");
+      client.println("<a href='/pin'><button>Configurar PIN</button></a><br>");
+      client.println("<a href='/sonido'><button>Alternar conf sonido alarma</button></a><br>");
+      client.println("<a href='/guardar'><button>Guardar configuracion</button></a><br>");
+      client.println("<a href='/cargar'><button>Cargar configuracion</button></a><br>");
+
+      client.println("</body>");
+      client.println("</html>");
+
+      delay(1);
+      client.stop();
+    } else {
+        // --- Generar pagina web alarma activa ---
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/html");
+      client.println("Connection: close");
+      client.println();
+      client.println("<!DOCTYPE HTML>");
+      client.println("<html>");
+      client.println("<head><meta name='viewport' content='width=device-width, initial-scale=1'/>");
+      client.println("<style>");
+      client.println("button { width:200px; height:60px; font-size:24px; margin:10px; }");
+      client.println("</style>");
+      client.println("</head>");
+      client.println("<body style='text-align:center; font-family:Arial;'>");
+
+      client.println("<h1>ALARMA ACTIVADA</h1>");
+
+      client.println("<a href='/off'><button>Desbloquear alarma</button></a><br>");
+     
+      client.println("</body>");
+      client.println("</html>");
+
+      delay(1);
+      client.stop();
+    }
     Serial.println("Cliente desconectado");
   }
 
