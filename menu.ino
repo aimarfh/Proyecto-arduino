@@ -1,5 +1,4 @@
 /*
-  Menú + PIN + SD + MQTT para MKR WiFi 1010 + MKR IoT Carrier
   Opciones:
    TOUCH0 -> Opción 1: Activar/Desactivar alarma
    TOUCH1 -> Opción 2: Configurar PIN
@@ -7,8 +6,8 @@
    TOUCH3 -> Opción 4: Guardar configuración (sobrescibir)
    TOUCH4 -> Opción 5: Cargar configuración desde SD
   MQTT topics:
-   - casa/arduino/comando  (recibir comandos)
-   - casa/arduino/estado   (publicar estados)
+   - alarma/cmd  (recibir comandos)
+   - alarma/estado   (publicar estados)
 */
 
 #include <Arduino_MKRIoTCarrier.h>
@@ -57,8 +56,8 @@ MqttClient mqttClient(wifiClient);
 
 
 // MQTT topics
-const char topicCmd[] = "arduino_cmd";
-const char topicEstado[] = "arduino_estado";
+const char topicCmd[] = "alarma/cmd";
+const char topicEstado[] = "alarma/estado";
 
 const char mqttServer[] = "test.mosquitto.org"; // broker.hivemq.com   test.mosquitto.org
 int port = 1883;
@@ -702,12 +701,6 @@ void conectarMqtt() {
 void onMqttMessage(int messageSize) {
   String mensaje = mqttClient.readString();
 
-  // String mensaje = "";
-  // while (mqttClient.available()) {
-  //   mensaje += (char)mqttClient.read();
-  // }
-  // mensaje.trim();
-
   Serial.println("==================================");
   Serial.println("Comando recibido.");
   Serial.print("Tamaño: ");
@@ -720,13 +713,50 @@ void onMqttMessage(int messageSize) {
   // Procesar comandos
   mensaje.trim(); // Elimina espacios y \n al inicio/final
 
-  if (mensaje == "MENU") {
-    estado = 0;
-    Serial.println("→ Comando: MENU");
+  // Configuracion pin
+  //pin1 3
+
+  if (mensaje.startsWith("pin")) {
+
+      // Extraer el indice después de 'pin'
+      int id = mensaje.substring(3, 4).toInt();  // 1 dígito
+
+      // Validar índice correcto
+      if (id >= 0 && id < 4) {
+
+          // Obtener el número después del espacio
+          int espacio = mensaje.indexOf(' ');
+          if (espacio != -1) {
+
+              int valor = mensaje.substring(espacio + 1).toInt();
+
+              // Validar valor (0–9)
+              if (valor >= 0 && valor <= 9) {
+
+                  pinCode[id] = valor;
+
+                  Serial.print("PIN[");
+                  Serial.print(id);
+                  Serial.print("] actualizado a: ");
+                  Serial.println(valor);
+
+              } else {
+                  Serial.println("ERROR: Valor fuera de rango (0-9)");
+              }
+
+          } else {
+              Serial.println("ERROR: Falta el valor en el comando");
+          }
+
+      } else {
+          Serial.println("ERROR: Índice fuera de rango (0-3)");
+      }
+    enviarEstado();
   }
-  else if (mensaje == "ALARMA_TOGGLE") {
+
+  else if (mensaje == "activar") {
     estado = 1;
-    Serial.println("→ Comando: ALARMA_TOGGLE");
+    Serial.println("→ Comando: activar");
   }
   else if (mensaje == "SOUND_ON") {
     sonido = true;
@@ -736,19 +766,25 @@ void onMqttMessage(int messageSize) {
     sonido = false;
     Serial.println("→ Sonido desactivado por MQTT");
   }
-  else if (mensaje == "SAVE") {
+  else if (mensaje == "save") {
     guardarConfiguracion();
     estado = 0;
     Serial.println("→ Configuración guardada por MQTT");
   }
-  else if (mensaje == "LOAD") {
+  else if (mensaje == "load") {
     leerConfiguracion();
     estado = 0;
     Serial.println("→ Configuración cargada por MQTT");
   }
+  else if (mensaje == "estado") {
+    enviarEstado();
+    Serial.println("→ Enviar estado a cliente MQTT");
+  }
   else {
     Serial.println("→ Comando MQTT no reconocido");
-    enviarEstado();
+    mqttClient.beginMessage(topicEstado);
+    mqttClient.print("Error, comando incorrecto, para ver estado: 'estado' ");
+    mqttClient.endMessage();
   }
 }
 
@@ -757,6 +793,10 @@ void onMqttMessage(int messageSize) {
 void enviarEstado() {
   mqttClient.beginMessage(topicEstado);
 
+  // Enviar estado arduino
+  mqttClient.print("Estado Arduino: ");
+  mqttClient.print(estado);
+  mqttClient.print("\n");
   
   // Enviar pin configurado
   mqttClient.print(pinCode[0]);
